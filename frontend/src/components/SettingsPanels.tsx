@@ -1,6 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
+import { useAuth } from "../auth";
 import type { Tweaks } from "../types";
+
+const initialsOf = (name: string) =>
+  name.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? "").join("") || "·";
 
 type SettingRowProps = { icon?: IconName; title: string; desc?: string; control?: ReactNode };
 
@@ -18,28 +22,30 @@ const SettingRow = ({ icon, title, desc, control }: SettingRowProps) => {
   );
 };
 
-export const ProfilePanel = () => (
-  <>
-    <div className="card-head"><h3>Profile</h3><span className="meta">How others see you</span></div>
-    <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
-      <div className="avatar" style={{ width: 64, height: 64, fontSize: 22, borderRadius: 18 }}>EV</div>
-      <div>
-        <div style={{ fontWeight: 600, fontSize: 16 }}>Eve Holt</div>
-        <div className="muted" style={{ fontSize: 13 }}>Workplace Admin · Frieswings HQ</div>
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button className="btn sm">Change photo</button>
-          <button className="btn sm ghost">Remove</button>
+export const ProfilePanel = () => {
+  const { user } = useAuth();
+  return (
+    <>
+      <div className="card-head"><h3>Profile</h3><span className="meta">How others see you</span></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
+        <div className="avatar" style={{ width: 64, height: 64, fontSize: 22, borderRadius: 18 }}>{user ? initialsOf(user.name) : "·"}</div>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>{user?.name ?? "—"}</div>
+          <div className="muted" style={{ fontSize: 13, textTransform: "capitalize" }}>{user?.role ?? ""}</div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button className="btn sm">Change photo</button>
+            <button className="btn sm ghost">Remove</button>
+          </div>
         </div>
       </div>
-    </div>
-    <div className="grid-2">
-      <div className="field"><label>Display name</label><input className="input" defaultValue="Eve Holt" /></div>
-      <div className="field"><label>Pronouns</label><input className="input" defaultValue="she/her" /></div>
-      <div className="field"><label>Work email</label><input className="input" defaultValue="eve@frieswings.com" /></div>
-      <div className="field"><label>Phone</label><input className="input" defaultValue="+1 (415) 555-0142" /></div>
-    </div>
-  </>
-);
+      <div className="grid-2">
+        <div className="field"><label>Display name</label><input className="input" defaultValue={user?.name ?? ""} /></div>
+        <div className="field"><label>Role</label><input className="input" defaultValue={user?.role ?? ""} /></div>
+        <div className="field"><label>Work email</label><input className="input" defaultValue={user?.email ?? ""} /></div>
+      </div>
+    </>
+  );
+};
 
 export const NotifPanel = () => {
   const [s, set] = useState({ email: true, push: true, sms: false, digest: true });

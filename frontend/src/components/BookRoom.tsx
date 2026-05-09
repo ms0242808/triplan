@@ -1,18 +1,27 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { TopBar } from "./Shell";
-import { ROOMS, ICON_FOR_AMENITY, type Room } from "../data";
+import { ICON_FOR_AMENITY } from "../data";
+import { api, type Attendee, type Booking, type Room } from "../api";
+import { useAuth } from "../auth";
 import type { Screen } from "../types";
 
-const TIME_SLOTS = [
-  "8:00", "8:30", "9:00", "9:30", "10:00", "10:30",
-  "11:00", "11:30", "12:00", "12:30", "1:00", "1:30",
-  "2:00", "2:30", "3:00", "3:30", "4:00", "4:30",
-];
-const TAKEN_INDEX = new Set([0, 1, 8, 9, 14]);
+// 30-minute slots starting 8:00 → "8:00", "8:30", ..., "4:30" (16:30)
+const SLOT_COUNT = 18;
+const SLOT_START_HOUR = 8;
+const slotToHours = (i: number) => SLOT_START_HOUR + i * 0.5;
+const slotLabel = (i: number) => {
+  const h = slotToHours(i);
+  const hh = Math.floor(h);
+  const mm = (h - hh) * 60;
+  const dh = ((hh + 11) % 12) + 1;
+  return `${dh}:${String(mm).padStart(2, "0")}`;
+};
+
+const initialsOf = (name: string) =>
+  name.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? "").join("") || "·";
 
 type StepIndicatorProps = { step: number };
-
 const StepIndicator = ({ step }: StepIndicatorProps) => (
   <div className="steps">
     {["Find a room", "Pick a time", "Invite & details", "Confirm"].map((s, i) => (
@@ -27,13 +36,11 @@ const StepIndicator = ({ step }: StepIndicatorProps) => (
   </div>
 );
 
-type RoomTileProps = { room: Room; selected: boolean; onClick: () => void };
-
-const RoomTile = ({ room, selected, onClick }: RoomTileProps) => (
+const RoomTile = ({ room, selected, onClick }: { room: Room; selected: boolean; onClick: () => void }) => (
   <div className="card room-card" style={{ outline: selected ? "2px solid var(--accent)" : "none", cursor: "pointer", padding: 0 }} onClick={onClick}>
     <div className={`room-photo ${room.photo}`}>
       <div className="stripe" />
-      <span className="pill free tag"><span className="dot" /> Free now</span>
+      <span className="pill free tag"><span className="dot" /> Active</span>
       {selected && (
         <div style={{ position: "absolute", top: 12, right: 12, width: 26, height: 26, borderRadius: 50, background: "var(--accent)", color: "white", display: "grid", placeItems: "center", boxShadow: "0 4px 12px -4px oklch(0.55 0.14 252 / 0.6)" }}>
           <Icon.Check size={14} sw={2.4} />
@@ -43,7 +50,7 @@ const RoomTile = ({ room, selected, onClick }: RoomTileProps) => (
     <div className="room-body">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <h4>{room.name}</h4>
-        <span className="muted" style={{ fontSize: 12, fontWeight: 600 }}>{room.cap} seats</span>
+        <span className="muted" style={{ fontSize: 12, fontWeight: 600 }}>{room.capacity} seats</span>
       </div>
       <div className="meta">{room.floor}</div>
       <div className="room-amenities">
@@ -56,9 +63,7 @@ const RoomTile = ({ room, selected, onClick }: RoomTileProps) => (
   </div>
 );
 
-type RowProps = { icon: IconName; k: string; v: string };
-
-const Row = ({ icon, k, v }: RowProps) => {
+const Row = ({ icon, k, v }: { icon: IconName; k: string; v: string }) => {
   const Ic = Icon[icon];
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--hairline)" }}>
@@ -71,29 +76,106 @@ const Row = ({ icon, k, v }: RowProps) => {
   );
 };
 
-type Props = { go: (s: Screen) => void; onBooked: () => void; defaultStep?: number };
+type Props = { go: (s: Screen) => void; onBooked: (bookingId: string, summary: string) => void };
 
-const ATTENDEE_NAMES: Record<string, string> = { MC: "Maya Chen", JR: "Jordan Rao", PD: "Priya Devi" };
-
-export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
-  const [step, setStep] = useState(defaultStep);
+export const BookRoom = ({ go, onBooked }: Props) => {
+  const { user } = useAuth();
+  const [step, setStep] = useState(0);
   const [filter, setFilter] = useState({ size: "any", floor: "any", amen: "any" });
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [room, setRoom] = useState<Room | null>(null);
-  const [date] = useState("Today, May 9");
+  const [date] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
   const [slotRange, setSlotRange] = useState<[number, number]>([4, 5]);
   const [title, setTitle] = useState("Q3 Roadmap Sync");
-  const [attendees, setAttendees] = useState(["MC", "JR", "PD"]);
-  const [agenda, setAgenda] = useState("• Review Q2 outcomes\n• Align on Q3 priorities\n• Owners and dates");
+  const [attendeeInput, setAttendeeInput] = useState("");
+  const [attendees, setAttendees] = useState<Attendee[]>([]);
+  const [agenda, setAgenda] = useState("");
   const [recurring, setRecurring] = useState(false);
   const [privateMtg, setPrivate] = useState(false);
+  const [roomBookings, setRoomBookings] = useState<Booking[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const filteredRooms = ROOMS.filter(r => {
+  useEffect(() => {
+    api.rooms.list()
+      .then(r => setRooms(r.rooms))
+      .catch(err => setError(err instanceof Error ? err.message : "Failed to load rooms"));
+  }, []);
+
+  // Fetch existing bookings for the chosen room + date so we can grey out taken slots.
+  useEffect(() => {
+    if (!room) { setRoomBookings([]); return; }
+    const from = new Date(date);
+    const to = new Date(date); to.setHours(23, 59, 59, 999);
+    api.bookings.list({ room_id: room.id, from, to })
+      .then(r => setRoomBookings(r.bookings))
+      .catch(() => setRoomBookings([]));
+  }, [room, date]);
+
+  const takenSlots = useMemo(() => {
+    const taken = new Set<number>();
+    for (const b of roomBookings) {
+      const s = new Date(b.starts_at);
+      const e = new Date(b.ends_at);
+      const sHr = s.getHours() + s.getMinutes() / 60;
+      const eHr = e.getHours() + e.getMinutes() / 60;
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        const sh = slotToHours(i);
+        const eh = slotToHours(i + 1);
+        if (sh < eHr && eh > sHr) taken.add(i);
+      }
+    }
+    return taken;
+  }, [roomBookings]);
+
+  const dateLabel = useMemo(() => date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), [date]);
+
+  const filteredRooms = rooms.filter(r => {
     if (filter.size !== "any") {
-      if (filter.size === "12+") { if (r.cap < 12) return false; }
-      else if (r.cap > parseInt(filter.size)) return false;
+      if (filter.size === "12+") { if (r.capacity < 12) return false; }
+      else if (r.capacity > parseInt(filter.size)) return false;
     }
     return true;
   });
+
+  const addAttendee = () => {
+    const name = attendeeInput.trim();
+    if (!name) return;
+    setAttendees(prev => [...prev, { name, initials: initialsOf(name) }]);
+    setAttendeeInput("");
+  };
+
+  const submit = async () => {
+    if (!room) return;
+    setSubmitting(true);
+    setError(null);
+    const startsAt = new Date(date); startsAt.setHours(0, 0, 0, 0);
+    startsAt.setMinutes(slotToHours(slotRange[0]) * 60);
+    const endsAt = new Date(date); endsAt.setHours(0, 0, 0, 0);
+    endsAt.setMinutes(slotToHours(slotRange[1] + 1) * 60);
+    try {
+      const r = await api.bookings.create({
+        room_id: room.id,
+        title,
+        agenda: agenda || null,
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        is_private: privateMtg,
+        is_recurring: recurring,
+        attendees,
+      });
+      const summary = `Booked ${room.name} · ${slotLabel(slotRange[0])} – ${slotLabel(slotRange[1] + 1)}`;
+      onBooked(r.booking.id, summary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create booking");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const Step0 = (
     <>
@@ -101,7 +183,7 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px", height: 38, borderRadius: 10, background: "var(--bg-2)", boxShadow: "inset 0 0 0 1px var(--hairline)" }}>
             <Icon.Sparkle />
-            <input style={{ border: 0, background: "transparent", outline: "none", width: 320, fontSize: 13 }} placeholder="Try: 8 people with whiteboard, near my desk, 2pm–3pm" />
+            <input style={{ border: 0, background: "transparent", outline: "none", width: 320, fontSize: 13 }} placeholder="Search by capacity, floor, or amenities" />
           </div>
           <div style={{ flex: 1 }} />
           <select className="select" value={filter.size} onChange={e => setFilter(f => ({ ...f, size: e.target.value }))} style={{ width: 160, height: 38 }}>
@@ -117,80 +199,81 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
           </select>
           <select className="select" value={filter.amen} onChange={e => setFilter(f => ({ ...f, amen: e.target.value }))} style={{ width: 180, height: 38 }}>
             <option value="any">Any amenities</option>
-            <option>Whiteboard</option><option>Video conferencing</option><option>Coffee station</option>
+            <option>Whiteboard</option><option>Video</option><option>Coffee</option>
           </select>
         </div>
       </div>
 
-      <div className="grid-3">
-        {filteredRooms.map(r => (
-          <RoomTile key={r.id} room={r} selected={room?.id === r.id} onClick={() => setRoom(r)} />
-        ))}
-      </div>
+      {filteredRooms.length === 0 ? (
+        <div className="card muted">No rooms match your filters.</div>
+      ) : (
+        <div className="grid-3">
+          {filteredRooms.map(r => (
+            <RoomTile key={r.id} room={r} selected={room?.id === r.id} onClick={() => setRoom(r)} />
+          ))}
+        </div>
+      )}
     </>
   );
+
+  const renderSlot = (i: number) => {
+    const taken = takenSlots.has(i);
+    const sel = i === slotRange[0];
+    const inRange = i > slotRange[0] && i <= slotRange[1];
+    return (
+      <button
+        key={i}
+        className={"slot " + (taken ? "taken" : sel ? "selected" : inRange ? "range" : "")}
+        disabled={taken}
+        onClick={() => setSlotRange([i, Math.min(i + 1, SLOT_COUNT - 1)])}
+      >
+        {slotLabel(i)}
+      </button>
+    );
+  };
 
   const Step1 = (
     <div className="book-grid" style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 18 }}>
       <div>
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-head">
-            <h3>Pick date and time</h3>
+            <h3>Pick a time</h3>
             <div className="grow" />
             <div className="seg">
               <button className="on">Today</button>
-              <button>Tomorrow</button>
-              <button>Pick date</button>
             </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
             <Icon.Calendar />
-            <div style={{ fontWeight: 600 }}>{date}</div>
+            <div style={{ fontWeight: 600 }}>{dateLabel}</div>
             <span className="muted">·</span>
-            <span className="muted">All times in PT</span>
+            <span className="muted">Local time</span>
           </div>
 
           <div style={{ marginBottom: 8, fontSize: 12, color: "var(--text-3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Morning</div>
           <div className="slots" style={{ marginBottom: 14 }}>
-            {TIME_SLOTS.slice(0, 9).map((t, i) => {
-              const taken = TAKEN_INDEX.has(i);
-              const sel = i === slotRange[0];
-              const inRange = i > slotRange[0] && i <= slotRange[1];
-              return (
-                <button key={t} className={"slot " + (taken ? "taken" : sel ? "selected" : inRange ? "range" : "")} disabled={taken}
-                  onClick={() => setSlotRange([i, Math.min(i + 1, TIME_SLOTS.length - 1)])}>
-                  {t}
-                </button>
-              );
-            })}
+            {Array.from({ length: 9 }, (_, i) => renderSlot(i))}
           </div>
           <div style={{ marginBottom: 8, fontSize: 12, color: "var(--text-3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Afternoon</div>
           <div className="slots">
-            {TIME_SLOTS.slice(9).map((t, i) => {
-              const idx = i + 9;
-              const taken = TAKEN_INDEX.has(idx);
-              const sel = idx === slotRange[0];
-              const inRange = idx > slotRange[0] && idx <= slotRange[1];
-              return (
-                <button key={t} className={"slot " + (taken ? "taken" : sel ? "selected" : inRange ? "range" : "")} disabled={taken}
-                  onClick={() => setSlotRange([idx, Math.min(idx + 1, TIME_SLOTS.length - 1)])}>
-                  {t}
-                </button>
-              );
-            })}
+            {Array.from({ length: SLOT_COUNT - 9 }, (_, i) => renderSlot(i + 9))}
           </div>
 
           <div className="h-divider" />
 
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <div className="field" style={{ flex: 1 }}>
-              <label>Duration</label>
-              <select className="select" defaultValue="1h">
-                <option value="30m">30 minutes</option>
-                <option value="1h">1 hour</option>
-                <option value="1.5h">1.5 hours</option>
-                <option value="2h">2 hours</option>
+              <label>Duration (slots)</label>
+              <select
+                className="select"
+                value={slotRange[1] - slotRange[0] + 1}
+                onChange={e => setSlotRange([slotRange[0], Math.min(slotRange[0] + Number(e.target.value) - 1, SLOT_COUNT - 1)])}
+              >
+                <option value={1}>30 minutes</option>
+                <option value={2}>1 hour</option>
+                <option value={3}>1.5 hours</option>
+                <option value={4}>2 hours</option>
               </select>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, alignSelf: "flex-end", padding: "0 4px 8px" }}>
@@ -207,11 +290,11 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
           <div className="stripe" />
         </div>
         <div style={{ fontWeight: 600, fontSize: 16 }}>{room?.name || "—"}</div>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>{room?.floor} · {room?.cap} seats</div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>{room?.floor} · {room?.capacity} seats</div>
         <div style={{ display: "grid", gap: 8 }}>
-          <Row icon="Calendar" k="Date" v={date} />
-          <Row icon="Clock" k="Time" v={`${TIME_SLOTS[slotRange[0]]} – ${TIME_SLOTS[slotRange[1]]} PM`} />
-          <Row icon="Users" k="Capacity" v={`${room?.cap || 0} seats`} />
+          <Row icon="Calendar" k="Date" v={dateLabel} />
+          <Row icon="Clock"    k="Time" v={`${slotLabel(slotRange[0])} – ${slotLabel(slotRange[1] + 1)}`} />
+          <Row icon="Users"    k="Capacity" v={`${room?.capacity ?? 0} seats`} />
         </div>
       </div>
     </div>
@@ -228,19 +311,26 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
         <div className="field">
           <label>Attendees</label>
           <div className="input" style={{ display: "flex", alignItems: "center", gap: 6, height: "auto", minHeight: 44, padding: 6, flexWrap: "wrap" }}>
-            {attendees.map(a => (
-              <span key={a} style={{ display: "flex", alignItems: "center", gap: 6, height: 28, padding: "0 4px 0 4px", borderRadius: 999, background: "var(--bg-2)", boxShadow: "inset 0 0 0 1px var(--hairline)", fontSize: 12, fontWeight: 600 }}>
-                <span className="avatar" style={{ width: 20, height: 20, fontSize: 9 }}>{a}</span>
-                {ATTENDEE_NAMES[a]}
-                <button onClick={() => setAttendees(att => att.filter(x => x !== a))} style={{ width: 18, height: 18, padding: 0, borderRadius: 50, color: "var(--text-3)" }}><Icon.X size={12} sw={2.4} /></button>
+            {attendees.map((a, i) => (
+              <span key={i} style={{ display: "flex", alignItems: "center", gap: 6, height: 28, padding: "0 4px", borderRadius: 999, background: "var(--bg-2)", boxShadow: "inset 0 0 0 1px var(--hairline)", fontSize: 12, fontWeight: 600 }}>
+                <span className="avatar" style={{ width: 20, height: 20, fontSize: 9 }}>{a.initials}</span>
+                {a.name}
+                <button onClick={() => setAttendees(att => att.filter((_, j) => j !== i))} style={{ width: 18, height: 18, padding: 0, borderRadius: 50, color: "var(--text-3)" }}><Icon.X size={12} sw={2.4} /></button>
               </span>
             ))}
-            <input style={{ flex: 1, border: 0, outline: 0, background: "transparent", minWidth: 140, fontSize: 13, height: 28 }} placeholder="Add people by name or email…" />
+            <input
+              style={{ flex: 1, border: 0, outline: 0, background: "transparent", minWidth: 140, fontSize: 13, height: 28 }}
+              placeholder="Add a name and press Enter…"
+              value={attendeeInput}
+              onChange={e => setAttendeeInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addAttendee(); } }}
+              onBlur={addAttendee}
+            />
           </div>
         </div>
         <div className="field">
           <label>Agenda (optional)</label>
-          <textarea className="textarea" value={agenda} onChange={e => setAgenda(e.target.value)} />
+          <textarea className="textarea" value={agenda} onChange={e => setAgenda(e.target.value)} placeholder="Notes, links, things to cover" />
         </div>
         <div className="grid-2">
           <div className="field">
@@ -252,8 +342,10 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
             </div>
           </div>
           <div className="field">
-            <label>Catering</label>
-            <select className="select"><option>None</option><option>Coffee & tea</option><option>Light lunch</option><option>Custom request</option></select>
+            <label>Organizer</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 12px", height: 40, background: "var(--bg-2)", boxShadow: "inset 0 0 0 1px var(--hairline)", borderRadius: 10, fontSize: 13 }}>
+              <Icon.Users /> {user?.name ?? "—"}
+            </div>
           </div>
         </div>
       </div>
@@ -275,10 +367,10 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
           <h2 style={{ margin: "0 0 4px", fontSize: 22, letterSpacing: "-0.02em" }}>{title}</h2>
           <div className="muted" style={{ marginBottom: 14 }}>{room?.name} · {room?.floor}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Row icon="Calendar" k="Date" v={date} />
-            <Row icon="Clock" k="Time" v={`${TIME_SLOTS[slotRange[0]]} – ${TIME_SLOTS[slotRange[1]]} PM`} />
-            <Row icon="Users" k="Attendees" v={`${attendees.length + 1} people`} />
-            <Row icon="Pin" k="Capacity" v={`${room?.cap} seats`} />
+            <Row icon="Calendar" k="Date"      v={dateLabel} />
+            <Row icon="Clock"    k="Time"      v={`${slotLabel(slotRange[0])} – ${slotLabel(slotRange[1] + 1)}`} />
+            <Row icon="Users"    k="Attendees" v={`${attendees.length + 1} people`} />
+            <Row icon="Pin"      k="Capacity"  v={`${room?.capacity ?? 0} seats`} />
           </div>
         </div>
       </div>
@@ -287,7 +379,7 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
 
   const next = () => {
     if (step === 0 && !room) return;
-    if (step === 3) { onBooked(); return; }
+    if (step === 3) { void submit(); return; }
     setStep(s => s + 1);
   };
   const back = () => step === 0 ? go("dashboard") : setStep(s => s - 1);
@@ -298,17 +390,21 @@ export const BookRoom = ({ go, onBooked, defaultStep = 0 }: Props) => {
 
       <StepIndicator step={step} />
 
+      {error && (
+        <div className="card" style={{ marginBottom: 14, color: "var(--busy)" }}>{error}</div>
+      )}
+
       {step === 0 && Step0}
       {step === 1 && Step1}
       {step === 2 && Step2}
       {step === 3 && Step3}
 
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 18 }}>
-        <button className="btn" onClick={back}><Icon.Chevron size={14} /> Back</button>
+        <button className="btn" onClick={back} disabled={submitting}><Icon.Chevron size={14} /> Back</button>
         <div style={{ display: "flex", gap: 8 }}>
           {step < 3 && <button className="btn ghost" onClick={() => go("dashboard")}>Cancel</button>}
-          <button className="btn primary" onClick={next} disabled={step === 0 && !room}>
-            {step === 3 ? "Confirm booking" : "Continue"} <Icon.Arrow size={14} />
+          <button className="btn primary" onClick={next} disabled={(step === 0 && !room) || submitting}>
+            {step === 3 ? (submitting ? "Booking…" : "Confirm booking") : "Continue"} <Icon.Arrow size={14} />
           </button>
         </div>
       </div>

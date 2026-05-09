@@ -1,18 +1,26 @@
 import { useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
+import { useAuth } from "../auth";
 
-type Props = { onSignIn: () => void };
-
-export const Login = ({ onSignIn }: Props) => {
+export const Login = () => {
+  const { login } = useAuth();
   const [email, setEmail] = useState("eve@frieswings.com");
-  const [pw, setPw] = useState("••••••••");
+  const [pw, setPw] = useState("atrium");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const submit = (e?: FormEvent) => {
+  const submit = async (e?: FormEvent) => {
     e?.preventDefault();
     setBusy(true);
-    setTimeout(() => { setBusy(false); onSignIn(); }, 700);
+    setError(null);
+    try {
+      await login(email, pw);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign in failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -28,7 +36,7 @@ export const Login = ({ onSignIn }: Props) => {
           </div>
           <h1 style={{ margin: "0 0 6px", fontSize: 30, letterSpacing: "-0.025em", fontWeight: 600 }}>Welcome back</h1>
           <div className="muted" style={{ marginBottom: 24, fontSize: 14 }}>
-            Sign in to book rooms, manage events, and host visitors at Frieswings HQ.
+            Sign in to book rooms, manage events, and host visitors.
           </div>
 
           <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -52,26 +60,15 @@ export const Login = ({ onSignIn }: Props) => {
                 </button>
               </div>
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--text-2)", marginTop: 4 }}>
-              <input type="checkbox" defaultChecked /> Keep me signed in on this Mac
-            </label>
+            {error && (
+              <div style={{ fontSize: 12.5, color: "oklch(0.42 0.16 25)", padding: "8px 12px", borderRadius: 8, background: "oklch(0.95 0.04 25)", boxShadow: "inset 0 0 0 1px oklch(0.85 0.08 25)" }}>
+                {error}
+              </div>
+            )}
             <button type="submit" className="btn primary lg" disabled={busy} style={{ width: "100%", justifyContent: "center", marginTop: 6 }}>
               {busy ? "Signing in…" : "Sign in"}
               {!busy && <Icon.Arrow />}
             </button>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, color: "var(--text-3)", fontSize: 11.5, margin: "8px 0", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
-              <div style={{ flex: 1, height: 1, background: "var(--hairline)" }} />
-              or continue with
-              <div style={{ flex: 1, height: 1, background: "var(--hairline)" }} />
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <button type="button" className="btn" style={{ justifyContent: "center" }} onClick={() => submit()}>
-                <Icon.Apple /> Continue with SSO
-              </button>
-              <button type="button" className="btn" style={{ justifyContent: "center" }} onClick={() => submit()}>
-                <Icon.Building /> Microsoft 365
-              </button>
-            </div>
           </form>
 
           <div className="muted" style={{ fontSize: 12, marginTop: 28, textAlign: "center" }}>
@@ -90,7 +87,7 @@ export const Login = ({ onSignIn }: Props) => {
         </div>
         <div className="quote">
           “The room knew we were coming. It dimmed the lights, started the call, and the team was already there.”
-          <small>— Maya Chen, Director of Operations</small>
+          <small>— Director of Operations</small>
         </div>
       </div>
     </div>

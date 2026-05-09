@@ -1,44 +1,110 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { TopBar } from "./Shell";
-import { ROOMS, ICON_FOR_AMENITY, type Room } from "../data";
-import type { Screen } from "../types";
+import { ICON_FOR_AMENITY } from "../data";
+import { api, type Booking, type Room } from "../api";
 
-type Props = { go: (s: Screen) => void };
+const AMENITY_OPTIONS = ["Display", "Whiteboard", "Video", "Mic", "Coffee", "Wi-Fi"];
 
-const TODAY_BOOKINGS = [5, 3, 2, 4, 7, 1];
-const HEAT_BARS = [0.6, 0.8, 0.4, 0.9, 0.5, 0.3, 0.7];
+const startOfDay = (d = new Date()) => { const s = new Date(d); s.setHours(0, 0, 0, 0); return s; };
+const endOfDay   = (d = new Date()) => { const e = new Date(d); e.setHours(23, 59, 59, 999); return e; };
 
-export const ManageRooms = ({ go: _go }: Props) => {
+type EditingState = {
+  id: string;
+  name: string;
+  capacity: number;
+  floor: string;
+  amenities: string[];
+};
+
+export const ManageRooms = () => {
   const [view, setView] = useState<"grid" | "list">("grid");
-  const [editing, setEditing] = useState<Room | null>(null);
-  const rooms = ROOMS;
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [todayBookings, setTodayBookings] = useState<Booking[]>([]);
+  const [editing, setEditing] = useState<EditingState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reload = async () => {
+    try {
+      const [r, b] = await Promise.all([
+        api.rooms.list(),
+        api.bookings.list({ from: startOfDay(), to: endOfDay() }),
+      ]);
+      setRooms(r.rooms);
+      setTodayBookings(b.bookings);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load");
+    }
+  };
+
+  useEffect(() => { void reload(); }, []);
+
+  const bookingsPerRoom = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const b of todayBookings) m.set(b.room_id, (m.get(b.room_id) ?? 0) + 1);
+    return m;
+  }, [todayBookings]);
+
+  const startEdit = (r: Room) => setEditing({ id: r.id, name: r.name, capacity: r.capacity, floor: r.floor, amenities: [...r.amenities] });
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.rooms.update(editing.id, {
+        name: editing.name,
+        capacity: editing.capacity,
+        floor: editing.floor,
+        amenities: editing.amenities,
+      });
+      setEditing(null);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save room");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteRoom = async (id: string) => {
+    if (!confirm("Deactivate this room?")) return;
+    try {
+      await api.rooms.remove(id);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete");
+    }
+  };
+
+  const toggleAmenity = (a: string) => {
+    if (!editing) return;
+    setEditing({
+      ...editing,
+      amenities: editing.amenities.includes(a)
+        ? editing.amenities.filter(x => x !== a)
+        : [...editing.amenities, a],
+    });
+  };
 
   return (
     <>
       <TopBar
         title="Manage rooms"
-        subtitle={`${rooms.length} rooms across 4 floors · Frieswings HQ`}
+        subtitle={`${rooms.length} rooms`}
         actions={<button className="btn primary"><Icon.Plus /> Add room</button>}
       />
+
+      {error && <div className="card" style={{ marginBottom: 14, color: "var(--busy)" }}>{error}</div>}
 
       <div className="card" style={{ padding: 12, marginBottom: 18, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div className="seg">
           <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")}>Grid</button>
           <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>List</button>
         </div>
-        <select className="select" style={{ width: 140, height: 36 }}>
-          <option>All floors</option><option>Floor 1</option><option>Floor 2</option><option>Floor 3</option><option>Floor 4</option>
-        </select>
-        <select className="select" style={{ width: 160, height: 36 }}>
-          <option>All amenities</option><option>Whiteboard</option><option>Video</option>
-        </select>
-        <select className="select" style={{ width: 140, height: 36 }}>
-          <option>All status</option><option>Active</option><option>Maintenance</option>
-        </select>
         <div style={{ flex: 1 }} />
         <button className="btn"><Icon.Filter /> More filters</button>
-        <button className="btn"><Icon.ChartUp /> Export</button>
       </div>
 
       {view === "grid" ? (
@@ -49,7 +115,7 @@ export const ManageRooms = ({ go: _go }: Props) => {
                 <div className="stripe" />
                 <span className="pill free tag"><span className="dot" /> Active</span>
                 <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 6 }}>
-                  <button className="btn sm" style={{ background: "rgba(255,255,255,0.85)", height: 26, padding: "0 8px" }} onClick={() => setEditing(r)}>
+                  <button className="btn sm" style={{ background: "rgba(255,255,255,0.85)", height: 26, padding: "0 8px" }} onClick={() => startEdit(r)}>
                     <Icon.Edit size={12} /> Edit
                   </button>
                 </div>
@@ -59,7 +125,7 @@ export const ManageRooms = ({ go: _go }: Props) => {
                   <h4>{r.name}</h4>
                   <span className="pill">{r.rate}</span>
                 </div>
-                <div className="meta">{r.floor} · {r.cap} seats</div>
+                <div className="meta">{r.floor} · {r.capacity} seats</div>
                 <div className="room-amenities">
                   {r.amenities.map(a => {
                     const Ic = Icon[(ICON_FOR_AMENITY[a] || "Tv") as IconName];
@@ -67,14 +133,11 @@ export const ManageRooms = ({ go: _go }: Props) => {
                   })}
                 </div>
                 <div className="h-divider" />
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div className="muted" style={{ fontSize: 12 }}>Today: <strong style={{ color: "var(--text)" }}>{TODAY_BOOKINGS[i]} bookings</strong></div>
-                  <div style={{ display: "flex", gap: 4 }}>
-                    {HEAT_BARS.map((h, j) => (
-                      <div key={j} style={{ width: 4, height: 22 * h + 6, background: "var(--accent)", opacity: 0.4 + h * 0.6, borderRadius: 2 }} />
-                    ))}
-                  </div>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Today: <strong style={{ color: "var(--text)" }}>{bookingsPerRoom.get(r.id) ?? 0} {(bookingsPerRoom.get(r.id) ?? 0) === 1 ? "booking" : "bookings"}</strong>
                 </div>
+                {/* unused index ref to satisfy thumb variant pattern */}
+                <span style={{ display: "none" }}>{i}</span>
               </div>
             </div>
           ))}
@@ -87,7 +150,6 @@ export const ManageRooms = ({ go: _go }: Props) => {
               <div className="grow">Room</div>
               <div style={{ width: 100 }}>Capacity</div>
               <div style={{ width: 200 }}>Amenities</div>
-              <div style={{ width: 90 }}>Status</div>
               <div style={{ width: 90 }}>Today</div>
               <div style={{ width: 80 }} />
             </div>
@@ -98,16 +160,15 @@ export const ManageRooms = ({ go: _go }: Props) => {
                   <div className="title">{r.name}</div>
                   <div className="sub">{r.floor}</div>
                 </div>
-                <div style={{ width: 100, fontSize: 13, fontWeight: 500 }}>{r.cap} seats</div>
+                <div style={{ width: 100, fontSize: 13, fontWeight: 500 }}>{r.capacity} seats</div>
                 <div style={{ width: 200, display: "flex", gap: 4, flexWrap: "wrap" }}>
                   {r.amenities.slice(0, 3).map(a => <span key={a} className="pill" style={{ fontSize: 10.5, height: 19 }}>{a}</span>)}
                   {r.amenities.length > 3 && <span className="pill" style={{ fontSize: 10.5, height: 19 }}>+{r.amenities.length - 3}</span>}
                 </div>
-                <div style={{ width: 90 }}><span className="pill free"><span className="dot" /> Active</span></div>
-                <div style={{ width: 90, fontSize: 13 }}>{TODAY_BOOKINGS[i]} bookings</div>
+                <div style={{ width: 90, fontSize: 13 }}>{bookingsPerRoom.get(r.id) ?? 0} bookings</div>
                 <div style={{ width: 80, display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                  <button className="btn sm ghost" onClick={() => setEditing(r)}><Icon.Edit size={12} /></button>
-                  <button className="btn sm ghost" style={{ color: "var(--busy)" }}><Icon.Trash size={12} /></button>
+                  <button className="btn sm ghost" onClick={() => startEdit(r)}><Icon.Edit size={12} /></button>
+                  <button className="btn sm ghost" style={{ color: "var(--busy)" }} onClick={() => void deleteRoom(r.id)}><Icon.Trash size={12} /></button>
                 </div>
               </div>
             ))}
@@ -122,28 +183,39 @@ export const ManageRooms = ({ go: _go }: Props) => {
             <div className="sub">Update capacity, amenities, and access policies.</div>
             <div style={{ display: "grid", gap: 12 }}>
               <div className="grid-2">
-                <div className="field"><label>Name</label><input className="input" defaultValue={editing.name} /></div>
-                <div className="field"><label>Capacity</label><input className="input" type="number" defaultValue={editing.cap} /></div>
+                <div className="field"><label>Name</label>
+                  <input className="input" value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} />
+                </div>
+                <div className="field"><label>Capacity</label>
+                  <input className="input" type="number" value={editing.capacity} onChange={e => setEditing({ ...editing, capacity: Number(e.target.value) })} />
+                </div>
               </div>
-              <div className="field"><label>Floor / location</label><input className="input" defaultValue={editing.floor} /></div>
+              <div className="field"><label>Floor / location</label>
+                <input className="input" value={editing.floor} onChange={e => setEditing({ ...editing, floor: e.target.value })} />
+              </div>
               <div className="field">
                 <label>Amenities</label>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {["Display", "Whiteboard", "Video", "Mic", "Coffee", "Wi-Fi"].map(a => {
+                  {AMENITY_OPTIONS.map(a => {
                     const on = editing.amenities.includes(a);
                     const Ic = Icon[(ICON_FOR_AMENITY[a] || "Tv") as IconName];
-                    return <button key={a} className="btn sm" style={{ background: on ? "var(--accent-soft)" : "var(--surface-2)", color: on ? "var(--accent-ink)" : "var(--text-2)" }}><Ic size={12} /> {a}</button>;
+                    return (
+                      <button
+                        key={a}
+                        className="btn sm"
+                        onClick={() => toggleAmenity(a)}
+                        style={{ background: on ? "var(--accent-soft)" : "var(--surface-2)", color: on ? "var(--accent-ink)" : "var(--text-2)" }}
+                      >
+                        <Ic size={12} /> {a}
+                      </button>
+                    );
                   })}
                 </div>
               </div>
-              <div className="field">
-                <label>Access</label>
-                <select className="select"><option>Open to all employees</option><option>Approval required</option><option>Restricted to teams</option></select>
-              </div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
-              <button className="btn ghost" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn primary" onClick={() => setEditing(null)}>Save changes</button>
+              <button className="btn ghost" onClick={() => setEditing(null)} disabled={saving}>Cancel</button>
+              <button className="btn primary" onClick={() => void saveEdit()} disabled={saving}>{saving ? "Saving…" : "Save changes"}</button>
             </div>
           </div>
         </div>

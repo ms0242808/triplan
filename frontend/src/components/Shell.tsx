@@ -1,17 +1,22 @@
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
+import { useAuth } from "../auth";
 import type { Screen } from "../types";
 
 type NavItem = { id: Screen; label: string; icon: IconName; badge?: string | number };
 
-type SidebarProps = { screen: Screen; setScreen: (s: Screen) => void };
+type ShellProps = { screen: Screen; setScreen: (s: Screen) => void };
 
-export const Sidebar = ({ screen, setScreen }: SidebarProps) => {
+const initialsOf = (name: string) =>
+  name.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]?.toUpperCase() ?? "").join("") || "·";
+
+export const Sidebar = ({ screen, setScreen }: ShellProps) => {
+  const { user, logout } = useAuth();
   const items: NavItem[] = [
     { id: "dashboard", label: "Dashboard",    icon: "Home" },
     { id: "book",      label: "Book a Room",  icon: "Plus", badge: "New" },
     { id: "manage",    label: "Manage Rooms", icon: "Rooms" },
-    { id: "event",     label: "My Events",    icon: "Calendar", badge: 3 },
+    { id: "event",     label: "My Events",    icon: "Calendar" },
   ];
   const more: NavItem[] = [
     { id: "settings",  label: "Settings", icon: "Gear" },
@@ -22,7 +27,7 @@ export const Sidebar = ({ screen, setScreen }: SidebarProps) => {
         <div className="brand-mark">A</div>
         <div>
           <div className="brand-name">Atrium</div>
-          <div className="brand-sub">Frieswings HQ</div>
+          <div className="brand-sub">Workplace booking</div>
         </div>
       </div>
       <div className="nav-group">
@@ -51,12 +56,12 @@ export const Sidebar = ({ screen, setScreen }: SidebarProps) => {
         })}
       </div>
       <div className="sidebar-foot">
-        <div className="avatar">EV</div>
+        <div className="avatar">{user ? initialsOf(user.name) : "·"}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="who-name">Eve Holt</div>
-          <div className="who-role">Workplace Admin</div>
+          <div className="who-name">{user?.name ?? "—"}</div>
+          <div className="who-role" style={{ textTransform: "capitalize" }}>{user?.role ?? ""}</div>
         </div>
-        <button className="nav-item" style={{ width: 32, padding: 6 }} title="Sign out" onClick={() => setScreen("login")}>
+        <button className="nav-item" style={{ width: 32, padding: 6 }} title="Sign out" onClick={() => { void logout(); }}>
           <Icon.Logout />
         </button>
       </div>
@@ -64,7 +69,7 @@ export const Sidebar = ({ screen, setScreen }: SidebarProps) => {
   );
 };
 
-export const TabBar = ({ screen, setScreen }: SidebarProps) => {
+export const TabBar = ({ screen, setScreen }: ShellProps) => {
   const items: NavItem[] = [
     { id: "dashboard", label: "Home",     icon: "Home" },
     { id: "book",      label: "Book",     icon: "Plus" },
