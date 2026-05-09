@@ -1,53 +1,24 @@
 {
-	"name": "bookameeting",
-	"version": "0.1.0",
-	"private": true,
-	"dependencies": {
-		"@reduxjs/toolkit": "^2.2.7",
-		"@testing-library/user-event": "^13.5.0",
-		"axios": "^1.7.2",
-		"react": "^18.3.1",
-		"react-dom": "^18.3.1",
-		"react-redux": "^9.1.2",
-		"react-router-dom": "^6.26.0",
-		"react-scripts": "^5.0.1",
-		"web-vitals": "^2.1.4"
-	},
-	"scripts": {
-		"start": "react-scripts start",
-		"build": "react-scripts build",
-		"test": "react-scripts test --watchAll=false",
-		"eject": "react-scripts eject",
-		"lint": "eslint -c .eslintrc.js ./src",
-		"lint:fix": "eslint -c .eslintrc.js ./src --fix",
-		"prepare": "husky install"
-	},
-	"eslintConfig": {
-		"extends": [
-			"react-app",
-			"react-app/jest"
-		]
-	},
-	"browserslist": {
-		"production": [
-			">0.2%",
-			"not dead",
-			"not op_mini all"
-		],
-		"development": [
-			"last 1 chrome version",
-			"last 1 firefox version",
-			"last 1 safari version"
-		]
-	},
-	"devDependencies": {
-		"@babel/plugin-proposal-private-property-in-object": "^7.21.11",
-		"@babel/plugin-transform-private-property-in-object": "^7.24.7",
-		"@testing-library/jest-dom": "^6.4.8",
-		"@testing-library/react": "^16.0.0",
-		"husky": "^8.0.0",
-		"jest": "^27.5.1",
-		"tailwindcss": "^3.4.7",
-		"wrangler": "^3.67.1"
-	}
+  "name": "bookameeting",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5"
+  }
 }
